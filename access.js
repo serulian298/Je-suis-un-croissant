@@ -1,46 +1,56 @@
-const ACCESS_KEY='petit-french-access-v1';
-let ACCESS=JSON.parse(localStorage.getItem(ACCESS_KEY)||'null')||{
-  owned:['reussite','c3'],
-  granted:[],
-  codes:{reussite:{code:'B2-7K4P',active:true,maxUses:null,uses:0,expires:null},c3:{code:'3C-ROSE',active:true,maxUses:null,uses:0,expires:null}}
-};
+const ACCESS_KEY='petit-french-access-v2';
+let ACCESS=JSON.parse(localStorage.getItem(ACCESS_KEY)||'null')||{owned:[],granted:[],codes:{}};
+// One-time migration from the old prototype on the original browser only.
+try{const legacy=JSON.parse(localStorage.getItem('petit-french-access-v1')||'null');if(legacy&&!localStorage.getItem(ACCESS_KEY)){ACCESS={owned:legacy.owned||[],granted:legacy.granted||[],codes:legacy.codes||{}};localStorage.setItem(ACCESS_KEY,JSON.stringify(ACCESS))}}catch{}
 const saveAccess=()=>localStorage.setItem(ACCESS_KEY,JSON.stringify(ACCESS));
-function normalizeCode(v){return (v||'').trim().toUpperCase()}
+function normalizeCode(v){return(v||'').trim().toUpperCase()}
 function canAccessBook(id){return ACCESS.owned.includes(id)||ACCESS.granted.includes(id)}
-function redeemBookCode(code){
-  code=normalizeCode(code);
-  for(const [bookId,entry] of Object.entries(ACCESS.codes)){
-    if(!entry.active||normalizeCode(entry.code)!==code) continue;
-    if(entry.expires&&Date.now()>new Date(entry.expires).getTime()) return {ok:false,message:'Mã đã hết hạn.'};
-    if(entry.maxUses!=null&&entry.uses>=entry.maxUses) return {ok:false,message:'Mã đã hết lượt sử dụng.'};
-    if(!ACCESS.granted.includes(bookId)&&!ACCESS.owned.includes(bookId)) ACCESS.granted.push(bookId);
-    entry.uses=(entry.uses||0)+1;saveAccess();
-    return {ok:true,bookId,message:'Đã mở khóa '+(BOOKS[bookId]?.title||bookId)+' 🌸'};
-  }
-  return {ok:false,message:'Mã không hợp lệ hoặc đã bị thu hồi.'};
+function randomCode(prefix='BOOK'){let chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789',s='';for(let i=0;i<6;i++)s+=chars[Math.floor(Math.random()*chars.length)];return`${prefix}-${s}`}
+
+async function syncAccessFromBackend(){
+  if(!window.LingoBackend?.state?.user)return;
+  try{
+    // Preserve the original owner's local library by claiming those courses once on the real backend.
+    for(const id of ACCESS.owned){if(BOOKS[id]){try{await LingoBackend.ensureCourse(id,BOOKS[id].title,S?.goal?.language||'fr')}catch(e){console.warn('ensure course',id,e)}}}
+    const r=await LingoBackend.listMyCourses();
+    ACCESS.owned=[...new Set([...(r.owned||[]),...ACCESS.owned.filter(id=>(r.owned||[]).includes(id))])];
+    ACCESS.granted=[...new Set(r.granted||[])].filter(id=>!ACCESS.owned.includes(id));
+    saveAccess();
+    if(document.body.dataset.page==='access')renderAccessBooks();
+  }catch(e){console.warn('access sync',e)}
 }
-function randomCode(prefix='BOOK'){let chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789',s='';for(let i=0;i<5;i++)s+=chars[Math.floor(Math.random()*chars.length)];return `${prefix}-${s}`}
-function regenerateBookCode(bookId){let p=bookId==='reussite'?'B2':'3C';ACCESS.codes[bookId]={code:randomCode(p),active:true,maxUses:null,uses:0,expires:null};saveAccess();return ACCESS.codes[bookId].code}
-function revokeBookCode(bookId){if(ACCESS.codes[bookId])ACCESS.codes[bookId].active=false;saveAccess()}
+
+async function redeemBookCode(code){
+  code=normalizeCode(code);if(!code)return{ok:false,message:'Nhập mã sách trước.'};
+  if(!window.LingoBackend?.state?.user)return{ok:false,message:'Đăng nhập tài khoản trước rồi nhập mã sách.'};
+  try{const bookId=await LingoBackend.redeemCourseCode(code);if(!ACCESS.granted.includes(bookId)&&!ACCESS.owned.includes(bookId))ACCESS.granted.push(bookId);saveAccess();return{ok:true,bookId,message:'Đã mở khóa '+(BOOKS[bookId]?.title||bookId)+' 🌸'}}catch(e){return{ok:false,message:e.message||'Mã không hợp lệ, hết hạn hoặc đã bị thu hồi.'}}
+}
+
+async function regenerateBookCode(bookId){
+  if(!window.LingoBackend?.state?.user){alert('Đăng nhập trước để tạo mã dùng được trên thiết bị khác.');location='auth.html';return}
+  try{
+    await LingoBackend.ensureCourse(bookId,BOOKS[bookId]?.title||bookId,S?.goal?.language||'fr');
+    const old=ACCESS.codes[bookId];if(old?.code&&old.active){try{await LingoBackend.revokeCourseCode(old.code)}catch{}}
+    const prefix=bookId==='reussite'?'B2':bookId==='c3'?'3C':'BOOK',code=randomCode(prefix);
+    await LingoBackend.createCourseCode({bookId,code});
+    ACCESS.codes[bookId]={code,active:true,maxUses:null,uses:0,expires:null};if(!ACCESS.owned.includes(bookId))ACCESS.owned.push(bookId);ACCESS.granted=ACCESS.granted.filter(x=>x!==bookId);saveAccess();location.reload();
+  }catch(e){alert('Không tạo được mã: '+(e.message||e))}
+}
+async function revokeBookCode(bookId){let e=ACCESS.codes[bookId];if(!e)return;if(window.LingoBackend?.state?.user){try{await LingoBackend.revokeCourseCode(e.code)}catch(err){alert(err.message||err);return}}e.active=false;saveAccess();location.reload()}
+
 function bookAccessPanel(bookId){
-  if(!ACCESS.owned.includes(bookId)) return `<div class="notice"><b>🔓 Shared book</b><p class="muted">Quyển này đã được mở bằng mã sách. Bạn có thể học và lưu tiến độ riêng.</p></div>`;
-  let e=ACCESS.codes[bookId];if(!e){e=ACCESS.codes[bookId]={code:randomCode('BOOK'),active:true,maxUses:null,uses:0,expires:null};saveAccess()}
-  return `<div class="notice"><h3>🔑 Share access</h3><p class="share-code">${e.active?e.code:'Đã thu hồi'}</p><p class="muted">Gửi mã này cho bạn bè. Họ đăng nhập Google, nhập mã một lần và quyển sách sẽ xuất hiện trong Library của họ.</p><div class="form"><button onclick="copyBookCode('${bookId}')">📋 Copy code</button><button class="alt" onclick="shareBookCode('${bookId}')">📤 Share</button><button class="ghost" onclick="regenerateBookCode('${bookId}');location.reload()">♻️ Mã mới</button><button class="ghost" onclick="revokeBookCode('${bookId}');location.reload()">🚫 Thu hồi mã</button></div><p class="muted">Đã dùng: ${e.uses||0}${e.maxUses!=null?' / '+e.maxUses:''}</p></div>`
+  if(!ACCESS.owned.includes(bookId))return`<div class="notice"><b>🔓 Shared course</b><p class="muted">Course này đã được cấp cho tài khoản của bạn. Progress vẫn hoàn toàn riêng.</p></div>`;
+  let e=ACCESS.codes[bookId];
+  return`<div class="notice"><h3>🔑 Share access</h3><p class="share-code">${e?.active?e.code:'Chưa có mã hoạt động'}</p><p class="muted">Mã được lưu trên server. Bạn bè đăng nhập tài khoản, nhập một lần và course xuất hiện trong Library riêng của họ.</p><div class="form"><button onclick="copyBookCode('${bookId}')" ${!e?.active?'disabled':''}>📋 Copy code</button><button class="alt" onclick="shareBookCode('${bookId}')" ${!e?.active?'disabled':''}>📤 Share</button><button class="ghost" onclick="regenerateBookCode('${bookId}')">♻️ ${e?.active?'Mã mới':'Tạo mã'}</button><button class="ghost" onclick="revokeBookCode('${bookId}')" ${!e?.active?'disabled':''}>🚫 Thu hồi</button></div></div>`
 }
-async function copyBookCode(bookId){let code=ACCESS.codes[bookId]?.code||'';try{await navigator.clipboard.writeText(code);alert('Đã copy '+code)}catch{prompt('Copy mã này:',code)}}
-async function shareBookCode(bookId){let code=ACCESS.codes[bookId]?.code||'',title=BOOKS[bookId]?.title||'Petit French';let text=`Mình gửi bạn quyền học ${title} trên Petit French 🌸\nMã sách: ${code}`;if(navigator.share){try{await navigator.share({title:'Petit French · '+title,text})}catch{}}else{try{await navigator.clipboard.writeText(text);alert('Đã copy nội dung chia sẻ')}catch{prompt('Copy:',text)}}}
-function accessPage(){
-  let owned=[...new Set([...ACCESS.owned,...ACCESS.granted])];
-  accessBooks.innerHTML=owned.map(id=>`<div class="book"><h2>${BOOKS[id]?.emoji||'📕'} ${BOOKS[id]?.title||id}</h2><p>${ACCESS.owned.includes(id)?'Sách của bạn':'Đã mở bằng mã sách'}</p><a class="btn ghost" href="book.html?id=${id}">Mở sách</a></div>`).join('');
-  redeemBtn.onclick=()=>{let r=redeemBookCode(bookCode.value);accessMessage.innerHTML=`<div class="notice">${r.message}</div>`;if(r.ok)setTimeout(()=>location='book.html?id='+r.bookId,350)};
-}
+async function copyBookCode(bookId){let code=ACCESS.codes[bookId]?.code||'';if(!code)return;try{await navigator.clipboard.writeText(code);alert('Đã copy '+code)}catch{prompt('Copy mã này:',code)}}
+async function shareBookCode(bookId){let code=ACCESS.codes[bookId]?.code||'';if(!code)return;let title=BOOKS[bookId]?.title||'Lingo Bloom';let text=`Mình gửi bạn quyền học ${title} trên Lingo Bloom 🌸\nMã course: ${code}`;if(navigator.share){try{await navigator.share({title:'Lingo Bloom · '+title,text})}catch{}}else{try{await navigator.clipboard.writeText(text);alert('Đã copy nội dung chia sẻ')}catch{prompt('Copy:',text)}}}
+
+function renderAccessBooks(){let owned=[...new Set([...ACCESS.owned,...ACCESS.granted])];accessBooks.innerHTML=owned.map(id=>`<div class="book"><h2>${BOOKS[id]?.emoji||'📕'} ${BOOKS[id]?.title||id}</h2><p>${ACCESS.owned.includes(id)?'Course của bạn':'Đã mở bằng mã course'}</p><a class="btn ghost" href="book.html?id=${id}">Mở course</a></div>`).join('')||'<div class="notice">Library đang trống. Nhập mã course được bạn bè gửi để bắt đầu.</div>'}
+function accessPage(){renderAccessBooks();redeemBtn.onclick=async()=>{accessMessage.innerHTML='<div class="notice">Đang kiểm tra mã…</div>';let r=await redeemBookCode(bookCode.value);accessMessage.innerHTML=`<div class="notice">${r.message}</div>`;if(r.ok)setTimeout(()=>location='book.html?id='+r.bookId,350)}}
 function guardBookPage(bookId){if(canAccessBook(bookId))return true;location='access.html?need='+encodeURIComponent(bookId);return false}
-function accessNeedHint(){let need=new URLSearchParams(location.search).get('need');if(need&&BOOKS[need])accessMessage.innerHTML=`<div class="notice"><b>Bạn chưa có quyền với ${BOOKS[need].title}.</b><p>Nhập mã sách mà bạn bè đã gửi để mở khóa.</p></div>`}
+function accessNeedHint(){let need=new URLSearchParams(location.search).get('need');if(need&&BOOKS[need])accessMessage.innerHTML=`<div class="notice"><b>Bạn chưa có quyền với ${BOOKS[need].title}.</b><p>Đăng nhập và nhập mã course người khác gửi.</p></div>`}
 
-// Override Library so each account only sees books it owns or has redeemed.
-window.library=function(){let el=document.getElementById('books');let visible=Object.entries(BOOKS).filter(([id])=>canAccessBook(id));el.innerHTML=visible.map(([id,b])=>{let total=b.units.reduce((n,u)=>n+u[1].length,0),done=b.units.reduce((n,u,ui)=>n+u[1].filter((_,li)=>S.done[key(id,ui,li)]).length,0),p=Math.round(done/total*100);return `<div class="book" onclick="location='book.html?id=${id}'"><h2>${b.emoji} ${b.title}</h2><p>${b.subtitle}</p><span class="pill">${b.units.length} units</span><span class="pill">${p}% complete</span><div class="progress"><div class="bar" style="width:${p}%"></div></div></div>`}).join('')+S.imports.map(x=>`<div class="book"><h2>🪄 ${x.name}</h2><p>Imported draft · ${x.files.length} files</p></div>`).join('');if(!visible.length)el.innerHTML='<div class="notice">Chưa có sách. Nhập mã sách để bắt đầu 🌸</div>'}
+window.library=function(){let el=document.getElementById('books');let visible=Object.entries(BOOKS).filter(([id])=>canAccessBook(id));el.innerHTML=visible.map(([id,b])=>{let total=b.units.reduce((n,u)=>n+u[1].length,0),done=b.units.reduce((n,u,ui)=>n+u[1].filter((_,li)=>S.done[key(id,ui,li)]).length,0),p=Math.round(done/Math.max(total,1)*100);return`<div class="book" onclick="location='book.html?id=${id}'"><h2>${b.emoji} ${b.title}</h2><p>${b.subtitle}</p><span class="pill">${b.units.length} units</span><span class="pill">${p}% complete</span><div class="progress"><div class="bar" style="width:${p}%"></div></div></div>`}).join('');if(!visible.length)el.innerHTML='<div class="notice">Chưa có course. Nhập mã để bắt đầu 🌸</div>'}
 
-// Override Book so a direct link never bypasses access and owners can share the book code.
-window.book=function(){let q=new URLSearchParams(location.search),id=q.get('id')||'reussite';if(!guardBookPage(id))return;let b=BOOKS[id],el=document.getElementById('bookTree'),total=0,done=0;document.getElementById('bookTitle').textContent=b.title;el.innerHTML=b.units.map((u,ui)=>`<section><h2>${u[0]}</h2>${u[1].map((l,li)=>{let k=key(id,ui,li),sc=S.scores[k],st=S.done[k]?'✓':sc!=null&&sc<70?'◐':'○';total++;if(S.done[k])done++;return `<div class="lesson"><div class="grow"><b>${st} ${l}</b><div class="muted">${u[2].map(s=>names[s]||s).join(' · ')}</div></div>${sc!=null?`<span class="status">${sc}%</span>`:''}<a class="btn ghost" href="lesson.html?b=${id}&u=${ui}&l=${li}">Ouvrir</a></div>`}).join('')}</section>`).join('');let p=Math.round(done/total*100);bookPct.textContent=p+'%';bookBar.style.width=p+'%';let panel=document.getElementById('bookAccessPanel');if(panel)panel.innerHTML=bookAccessPanel(id)}
-
-window.addEventListener('DOMContentLoaded',()=>{if(document.body.dataset.page==='access'){accessPage();accessNeedHint()}});
+window.addEventListener('DOMContentLoaded',()=>{if(document.body.dataset.page==='access'){accessPage();accessNeedHint()}let tries=0,iv=setInterval(()=>{tries++;if(window.LingoBackend){clearInterval(iv);LingoBackend.onChange(st=>{if(st.user)syncAccessFromBackend()})}else if(tries>40)clearInterval(iv)},150)});
