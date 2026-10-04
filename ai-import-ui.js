@@ -12,7 +12,8 @@
         const bookId=bookSel?.value||'';
         const host=document.getElementById('scanResult');
         if(!fs.length)return alert('Chọn PDF / Word / scan / audio trước.');
-        if(!bookId||!window.BOOKS?.[bookId]){
+        const validBook=bookId&&typeof BOOKS!=='undefined'&&BOOKS[bookId];
+        if(!validBook){
           if(host)host.innerHTML='<div class="notice"><b>Chưa có course để import.</b><p class="muted">Library chưa sync xong hoặc tài khoản chưa có quyền course. Mở Library/Book codes trước, rồi quay lại Smart Import.</p><a class="btn ghost" href="access.html">🔑 Book codes</a></div>';
           return;
         }
