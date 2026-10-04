@@ -8,14 +8,27 @@
       btn.textContent='✨ AI Scan & Organize';
       btn.onclick=async()=>{
         const fs=[...document.getElementById('files').files];
-        const bookId=document.getElementById('bookTarget').value;
+        const bookSel=document.getElementById('bookTarget');
+        const bookId=bookSel?.value||'';
+        const host=document.getElementById('scanResult');
         if(!fs.length)return alert('Chọn PDF / Word / scan / audio trước.');
+        if(!bookId||!window.BOOKS?.[bookId]){
+          if(host)host.innerHTML='<div class="notice"><b>Chưa có course để import.</b><p class="muted">Library chưa sync xong hoặc tài khoản chưa có quyền course. Mở Library/Book codes trước, rồi quay lại Smart Import.</p><a class="btn ghost" href="access.html">🔑 Book codes</a></div>';
+          return;
+        }
+        if(typeof window.runAIScan!=='function'){
+          if(host)host.innerHTML='<div class="notice"><b>Smart Import chưa tải xong.</b><p class="muted">Refresh trang rồi thử lại.</p></div>';
+          return;
+        }
         btn.disabled=true;btn.textContent='Đang scan…';
         try{
           const draft=await window.runAIScan(bookId,fs);
+          if(!draft||!Array.isArray(draft.blocks)||!Array.isArray(draft.audioMap))throw new Error('Scanner trả về dữ liệu không hợp lệ.');
           window.renderScanDraft(draft);
         }catch(e){
-          console.error(e);alert('Không scan được bộ tài liệu này.');
+          console.error(e);
+          const msg=(e&&e.message)||String(e)||'Lỗi không xác định';
+          if(host)host.innerHTML=`<div class="notice"><b>Scan chưa hoàn tất.</b><p class="muted">${String(msg).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</p><p class="muted">File khác trong bộ sẽ không bị xoá. Có thể thử lại sau khi Library sync xong.</p></div>`;
         }finally{btn.disabled=false;btn.textContent='✨ AI Scan & Organize'}
       };
     }
