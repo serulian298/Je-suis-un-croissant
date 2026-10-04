@@ -7,6 +7,27 @@ function normalizeCode(v){return(v||'').trim().toUpperCase()}
 function canAccessBook(id){return ACCESS.owned.includes(id)||ACCESS.granted.includes(id)}
 function randomCode(prefix='BOOK'){let chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789',s='';for(let i=0;i<6;i++)s+=chars[Math.floor(Math.random()*chars.length)];return`${prefix}-${s}`}
 
+function refreshImporterAccessTargets(){
+  if(document.body.dataset.page!=='importer')return;
+  const bookSel=document.getElementById('bookTarget'),unitSel=document.getElementById('unitTarget'),lessonSel=document.getElementById('lessonTarget');
+  if(!bookSel||!unitSel||!lessonSel)return;
+  const previous=bookSel.value;
+  const visible=Object.entries(BOOKS).filter(([id])=>canAccessBook(id));
+  bookSel.innerHTML=visible.map(([id,b])=>`<option value="${id}" ${id===previous?'selected':''}>${b.emoji} ${b.title}</option>`).join('');
+  if(!bookSel.value&&visible[0])bookSel.value=visible[0][0];
+  if(!bookSel.value){
+    unitSel.innerHTML='<option value="">Chưa có course</option>';lessonSel.innerHTML='<option value="">Chưa có course</option>';unitSel.disabled=true;lessonSel.disabled=true;
+    const host=document.getElementById('scanResult');if(host)host.innerHTML='<div class="notice"><b>Library đang trống.</b><p class="muted">Mở hoặc nhập quyền một course trước khi Smart Import để có nơi map lesson/audio.</p><a class="btn ghost" href="access.html">🔑 Mở Book codes</a></div>';
+    return;
+  }
+  unitSel.disabled=false;
+  const b=BOOKS[bookSel.value];
+  unitSel.innerHTML='<option value="">Toàn bộ giáo trình</option>'+b.units.map((u,i)=>`<option value="${i}">Unit ${i+1} · ${u[0]}</option>`).join('');
+  lessonSel.innerHTML='<option value="">Chưa gán vào bài cụ thể</option>';lessonSel.disabled=true;
+  if(typeof bookSel.onchange==='function')bookSel.onchange();
+  window.dispatchEvent(new CustomEvent('lingo:access-synced',{detail:{owned:[...ACCESS.owned],granted:[...ACCESS.granted]}}));
+}
+
 async function syncAccessFromBackend(){
   if(!window.LingoBackend?.state?.user)return;
   try{
@@ -17,6 +38,7 @@ async function syncAccessFromBackend(){
     ACCESS.granted=[...new Set(r.granted||[])].filter(id=>!ACCESS.owned.includes(id));
     saveAccess();
     if(document.body.dataset.page==='access')renderAccessBooks();
+    refreshImporterAccessTargets();
   }catch(e){console.warn('access sync',e)}
 }
 
@@ -41,7 +63,7 @@ async function revokeBookCode(bookId){let e=ACCESS.codes[bookId];if(!e)return;if
 function bookAccessPanel(bookId){
   if(!ACCESS.owned.includes(bookId))return`<div class="notice"><b>🔓 Shared course</b><p class="muted">Course này đã được cấp cho tài khoản của bạn. Progress vẫn hoàn toàn riêng.</p></div>`;
   let e=ACCESS.codes[bookId];
-  return`<div class="notice"><h3>🔑 Share access</h3><p class="share-code">${e?.active?e.code:'Chưa có mã hoạt động'}</p><p class="muted">Mã được lưu trên server. Bạn bè đăng nhập tài khoản, nhập một lần và course xuất hiện trong Library riêng của họ.</p><div class="form"><button onclick="copyBookCode('${bookId}')" ${!e?.active?'disabled':''}>📋 Copy code</button><button class="alt" onclick="shareBookCode('${bookId}')" ${!e?.active?'disabled':''}>📤 Share</button><button class="ghost" onclick="regenerateBookCode('${bookId}')">♻️ ${e?.active?'Mã mới':'Tạo mã'}</button><button class="ghost" onclick="revokeBookCode('${bookId}')" ${!e?.active?'disabled':''}>🚫 Thu hồi</button></div></div>`
+  return`<div class="notice"><h3>🔑 Share access</h3><p class="share-code">${e?.active?e.code:'Chưa có mã hoạt động'}</p><p class="muted">Mã được lưu trên server. Bạn bè đăng nhập tài khoản, nhập một lần và course xuất hiện trong Library riêng của họ.</p><div class="form"><button onclick="copyBookCode('${bookId}')" ${!e?.active?'disabled':''}>📋 Copy code</button><button class="alt" onclick="shareBookCode('${bookId}')" ${!e?.active?'disabled':''}>📤 Share</button><button class="ghost" onclick="regenerateBookCode('${bookId}')">♻️ ${e?.active?'Mã mới':'Tạo mã'}</button><button class="ghost" onclick="revokeBookCode('${bookId}')" ${!e?.active?'disabled':''}>🚫 Thu hồi mã</button></div></div>`
 }
 async function copyBookCode(bookId){let code=ACCESS.codes[bookId]?.code||'';if(!code)return;try{await navigator.clipboard.writeText(code);alert('Đã copy '+code)}catch{prompt('Copy mã này:',code)}}
 async function shareBookCode(bookId){let code=ACCESS.codes[bookId]?.code||'';if(!code)return;let title=BOOKS[bookId]?.title||'Lingo Bloom';let text=`Mình gửi bạn quyền học ${title} trên Lingo Bloom 🌸\nMã course: ${code}`;if(navigator.share){try{await navigator.share({title:'Lingo Bloom · '+title,text})}catch{}}else{try{await navigator.clipboard.writeText(text);alert('Đã copy nội dung chia sẻ')}catch{prompt('Copy:',text)}}}
